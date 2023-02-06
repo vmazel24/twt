@@ -1,0 +1,135 @@
+// Streams are 'watching' a table and storing the insert/update/delete (default mode) or only insert (append-only mode)
+// We can select on a stream to see the changes
+// The stream contains all the columns of the watched table + 3 : METADATA$ACTION (INSERT or DELETE), METADATA$ISUPDATE (TRUE or FALSE) and METADATA$ROWID
+// Every time we consume (not select) a stream, it becomes empty
+
+
+-- Create a stream object
+create or replace stream sales_stream on table sales_raw_staging;
+
+-- insert values 
+insert into sales_raw_staging  
+    values
+        (6,'Mango',1.99,1,2),
+        (7,'Garlic',0.99,1,1);
+        
+-- Get changes on data using stream (INSERTS)
+select * from sales_stream;
+
+-- Consume INSERT stream object
+INSERT INTO sales_final_table 
+    SELECT 
+    SA.id,
+    SA.product,
+    SA.price,
+    SA.amount,
+    ST.STORE_ID,
+    ST.LOCATION, 
+    ST.EMPLOYEES 
+    FROM SALES_STREAM SA
+    JOIN STORE_TABLE ST ON ST.STORE_ID=SA.STORE_ID ;
+    
+-- update values
+UPDATE SALES_RAW_STAGING
+SET PRODUCT ='Potato' WHERE PRODUCT = 'Banana'
+
+
+-- CONSUME UPDATE stream object
+merge into SALES_FINAL_TABLE F      -- Target table to merge changes from source table
+using SALES_STREAM S                -- Stream that has captured the changes
+   on  f.id = s.id                 
+when matched 
+    and S.METADATA$ACTION ='INSERT'
+    and S.METADATA$ISUPDATE ='TRUE'        -- Indicates the record has been updated 
+    then update 
+    set f.product = s.product,
+        f.price = s.price,
+        f.amount= s.amount,
+        f.store_id=s.store_id;
+        
+-- delete value       
+DELETE FROM SALES_RAW_STAGING
+WHERE PRODUCT = 'Lemon';      
+
+-- CONSUME DELETE stream object
+merge into SALES_FINAL_TABLE F      -- Target table to merge changes from source table
+using SALES_STREAM S                -- Stream that has captured the changes
+   on  f.id = s.id          
+when matched 
+    and S.METADATA$ACTION ='DELETE' 
+    and S.METADATA$ISUPDATE = 'FALSE'
+    then delete               
+    
+    
+-- ******* Process UPDATE,INSERT & DELETE simultaneously  ********                       
+merge into SALES_FINAL_TABLE F      -- Target table to merge changes from source table
+USING ( SELECT STRE.*,ST.location,ST.employees
+        FROM SALES_STREAM STRE
+        JOIN STORE_TABLE ST
+        ON STRE.store_id = ST.store_id
+       ) S
+ON F.id=S.id
+when matched                        -- DELETE condition
+    and S.METADATA$ACTION ='DELETE' 
+    and S.METADATA$ISUPDATE = 'FALSE'
+    then delete                   
+when matched                        -- UPDATE condition
+    and S.METADATA$ACTION ='INSERT' 
+    and S.METADATA$ISUPDATE  = 'TRUE'       
+    then update 
+    set f.product = s.product,
+        f.price = s.price,
+        f.amount= s.amount,
+        f.store_id=s.store_id
+when not matched 
+    and S.METADATA$ACTION ='INSERT'
+    then insert 
+    (id,product,price,store_id,amount,employees,location)
+    values
+    (s.id, s.product,s.price,s.store_id,s.amount,s.employees,s.location)
+    
+    
+    
+    
+
+------- Automatate the updates using tasks --
+CREATE OR REPLACE TASK all_data_changes
+    WAREHOUSE = COMPUTE_WH
+    SCHEDULE = '1 MINUTE'
+    WHEN SYSTEM$STREAM_HAS_DATA('SALES_STREAM')
+    AS 
+merge into SALES_FINAL_TABLE F      -- Target table to merge changes from source table
+USING ( SELECT STRE.*,ST.location,ST.employees
+        FROM SALES_STREAM STRE
+        JOIN STORE_TABLE ST
+        ON STRE.store_id = ST.store_id
+       ) S
+ON F.id=S.id
+when matched                        -- DELETE condition
+    and S.METADATA$ACTION ='DELETE' 
+    and S.METADATA$ISUPDATE = 'FALSE'
+    then delete                   
+when matched                        -- UPDATE condition
+    and S.METADATA$ACTION ='INSERT' 
+    and S.METADATA$ISUPDATE  = 'TRUE'       
+    then update 
+    set f.product = s.product,
+        f.price = s.price,
+        f.amount= s.amount,
+        f.store_id=s.store_id
+when not matched 
+    and S.METADATA$ACTION ='INSERT'
+    then insert 
+    (id,product,price,store_id,amount,employees,location)
+    values
+    (s.id, s.product,s.price,s.store_id,s.amount,s.employees,s.location)
+
+ALTER TASK all_data_changes RESUME;
+SHOW TASKS;
+
+
+--change clause, look like STREAM are coming from this command
+SELECT * FROM SALES_RAW
+CHANGES(information  => default)
+AT (timestamp => 'your-timestamp'::timestamp_tz)
+

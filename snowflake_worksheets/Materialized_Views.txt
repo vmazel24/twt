@@ -1,0 +1,21 @@
+// Create a VIEW that is automatically maintained up to date by Snowflate (cost credits)
+// To be used on a specific situation : 
+//      - the view query is taking a long time
+//      - the table is updated rarely
+//      - the tabvle is queried often
+// Stream + task is a good alternative, specially on more regularly updated table
+// But an alternative to speed up expansive and compex views
+
+
+
+-- Create materialized view
+CREATE OR REPLACE MATERIALIZED VIEW ORDERS_MV
+AS 
+SELECT
+YEAR(O_ORDERDATE) AS YEAR,
+MAX(O_COMMENT) AS MAX_COMMENT,
+MIN(O_COMMENT) AS MIN_COMMENT,
+MAX(O_CLERK) AS MAX_CLERK,
+MIN(O_CLERK) AS MIN_CLERK
+FROM ORDERS.TPCH_SF100.ORDERS
+GROUP BY YEAR(O_ORDERDATE);

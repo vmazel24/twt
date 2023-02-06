@@ -1,0 +1,34 @@
+//Automatic load new files from a bucket into a DB
+// 1. Create the Pipe
+// 2. Use DESC to get the SQS (Simple Queue Service) channel, use it to setup as a new file notification on the AWS bucket
+
+//CREATE PIPE
+CREATE OR REPLACE pipe MANAGE_DB.pipes.employee_pipe
+auto_ingest = TRUE
+AS
+COPY INTO OUR_FIRST_DB.PUBLIC.employees
+FROM @MANAGE_DB.external_stages.csv_folder  
+
+// Describe pipe
+DESC pipe employee_pipe
+
+
+
+//ERROR HANDLING
+
+//Check which file the pipe tried to load
+ALTER PIPE employee_pipe refresh
+ 
+// Validate pipe is actually working
+SELECT SYSTEM$PIPE_STATUS('employee_pipe')
+
+// Snowpipe error message
+SELECT * FROM TABLE(VALIDATE_PIPE_LOAD(
+    PIPE_NAME => 'MANAGE_DB.pipes.employee_pipe',
+    START_TIME => DATEADD(HOUR,-2,CURRENT_TIMESTAMP())))
+
+// COPY command history from table to see error massage
+SELECT * FROM TABLE (INFORMATION_SCHEMA.COPY_HISTORY(
+   table_name  =>  'OUR_FIRST_DB.PUBLIC.EMPLOYEES',
+   START_TIME =>DATEADD(HOUR,-2,CURRENT_TIMESTAMP())))
+

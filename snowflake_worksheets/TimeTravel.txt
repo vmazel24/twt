@@ -1,0 +1,56 @@
+// Ramène des data supprimées/modifiées depuis une date antérieure
+// // // Using time travel: Method 1 - 2 minutes back
+SELECT * FROM PART at (OFFSET => -60*3) ORDER BY P_MFGR DESC;
+// // // Using time travel: Method 2 - before timestamp
+SELECT * FROM PART before (timestamp => '2021-04-15 17:47:50.581'::timestamp) ORDER BY P_MFGR DESC;
+// // // Using time travel: Method 3 - before Query ID
+SELECT * FROM PART before (statement => '01a9c152-0000-1062-0000-000027c92531') ORDER BY P_MFGR DESC;
+
+// ! Do not CREATE/RECREATE the table, insert the time travel data in a temp table, truncate the table and insert temp table data into table
+// ! If you CREATE/RECREATE the table, you'll loose the metadata
+CREATE OR REPLACE TABLE OUR_FIRST_DB.public.test_backup as
+SELECT * FROM OUR_FIRST_DB.public.test before (statement => '019b9ef0-0500-8473-0043-4d830007309a')
+
+TRUNCATE OUR_FIRST_DB.public.test
+
+INSERT INTO OUR_FIRST_DB.public.test
+SELECT * FROM OUR_FIRST_DB.public.test_backup
+
+
+
+
+
+
+CREATE OR REPLACE TABLE PART
+AS
+SELECT * FROM "SNOWFLAKE_SAMPLE_DATA"."TPCH_SF1"."PART";
+ 
+SELECT * FROM PART
+ORDER BY P_MFGR DESC;
+
+UPDATE PART
+SET P_MFGR='Manufacturer#CompanyX'
+WHERE P_MFGR='Manufacturer#5';
+ 
+----> Note down query id here:
+ 
+SELECT * FROM PART
+ORDER BY P_MFGR DESC;
+
+select * FROM EXERCISE_DB.INFORMATION_SCHEMA.LOAD_HISTORY;
+
+
+
+
+
+
+
+CREATE DATABASE TIMETRAVEL_EXERCISE;
+CREATE SCHEMA TIMETRAVEL_EXERCISE.COMPANY_X;
+CREATE TABLE CUSTOMER AS
+SELECT * FROM SNOWFLAKE_SAMPLE_DATA.TPCH_SF1.CUSTOMER
+LIMIT 500;
+DROP SCHEMA TIMETRAVEL_EXERCISE.COMPANY_X;
+SELECT * FROM TIMETRAVEL_EXERCISE.COMPANY_X.CUSTOMER;
+UNDROP SCHEMA TIMETRAVEL_EXERCISE.COMPANY_X;
+SELECT * FROM TIMETRAVEL_EXERCISE.COMPANY_X.CUSTOMER;

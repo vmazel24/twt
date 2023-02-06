@@ -1,28 +1,40 @@
-# Welcome to twt
+CREATE DATABASE TWT;
+CREATE SCHEMA TWT;
 
-Hello ! Ce projet est une petite application des connaissances acquises sur Snowflake.
-Pour faire simple, je récupère de la data via l'API Twitter (#RIP l'API gratuite), je la stocke sur AWS S3 puis je la récupère et la prépare dans Snowflake.
+CREATE OR REPLACE STORAGE INTEGRATION s3_twt
+  TYPE = EXTERNAL_STAGE
+  STORAGE_PROVIDER = S3
+  ENABLED = TRUE 
+  STORAGE_AWS_ROLE_ARN = 'arn:aws:iam::224849216410:user/snowflake-user'
+  STORAGE_ALLOWED_LOCATIONS = ('s3://snowflake-udemy-vmzl/');
 
-## Architecture
+DESC INTEGRATION s3_twt;
+SHOW INTEGRATIONS like 's3_twt';
 
-![diagramme](https://github.com/vmazel24/twt/blob/master/img/diag.png?raw=true)
+CREATE OR REPLACE file format json_twt_fileformat
+    TYPE = JSON;
+    
 
-## Python script
-
-Ce script s'execute sur EC2 (un VPS) d'AWS.
-J'utilise [Tweepy](https://www.tweepy.org/) pour faciliter les appels à l'API Tweeter.
-Je redéfini la fonction `on_data()` du Stream de Tweepy pour ne récupérer que les clefs qui m'intéressent dans la réponse et les envoyer dans le Firehose AWS pré-défini. Ce Firehose met les données sous forme de fichiers dans S3.
-J'applique également un filtre sur l'appel API pour sélectionner quelques mots clefs : 
-`stream.filter(track=['$UOS','$ATOM','$ENJ','$COTI','$SAND'], stall_warnings=True)`
-
-
-## Snowflake
+CREATE OR REPLACE table twt_raw (
+    raw variant);
+    
+CREATE OR REPLACE STAGE twt_stage
+    URL = 's3://snowflake-udemy-vmzl/'
+    STORAGE_INTEGRATION = s3_twt
+    FILE_FORMAT = json_twt_fileformat;
 
 
-### Tables
+COPY INTO twt_raw
+    FROM @twt_stage
+    file_format= json_twt_fileformat;
+    
+   
+SELECT * FROM twt_raw;
 
-La table **twt_user** contiendra tous les tweetos avec les informations sur leur compte mis à jour à date du dernier tweet récupéré.
-```  sql
+
+
+
+
 CREATE OR REPLACE TABLE twt_user (
   screen_name STRING PRIMARY KEY,
   username STRING NOT NULL,
@@ -35,9 +47,7 @@ CREATE OR REPLACE TABLE twt_user (
   verified_type STRING NOT NULL,
   last_updated DATETIME NOT NULL
 );
-```
-La table **twt_tweet** contient l'ensemble des tweets récupérés. Les informations de _count n'ont pas vraiment de valeur car sont récupérées peu après le tweet. Le champ *text* (contenu du tweet) peut être utile pour des analyse plus approfondies. On pourra également lier nos deux tables avec le champ *user_screen_name*.
-``` sql
+
 CREATE OR REPLACE TABLE twt_tweet (
     id STRING PRIMARY KEY,
     created_at DATETIME NOT NULL,
@@ -48,46 +58,46 @@ CREATE OR REPLACE TABLE twt_tweet (
     tweet_reply_count NUMBER NOT NULL,
     tweet_retweet_count NUMBER NOT NULL
 );
-```
 
-### Stage et SnowPipe
-Le stage est créé pour donner accès au S3.
-``` sql
-CREATE OR REPLACE STORAGE INTEGRATION s3_twt
-  TYPE = EXTERNAL_STAGE
-  STORAGE_PROVIDER = S3
-  ENABLED = TRUE 
-  STORAGE_AWS_ROLE_ARN = 'arn:aws:iam::<number>:user/snowflake-user'
-  STORAGE_ALLOWED_LOCATIONS = ('s3://snowflake-udemy-vmzl/');
 
-CREATE OR REPLACE STAGE twt_stage
-    URL = 's3://snowflake-udemy-vmzl/'
-    STORAGE_INTEGRATION = s3_twt
-    FILE_FORMAT = json_twt_fileformat;
-```
-Puis on définit notre snowpipe pour consommer directement les nouveaux fichiers notifiés dans notre table **twt_raw**.
-``` sql
+
+//CREATE PIPE
 CREATE OR REPLACE PIPE twt_pipe
 auto_ingest = TRUE
 AS
 COPY INTO twt_raw
 FROM @twt_stage;
-```
-### Stream
-On définit notre stream sur **twt_raw** en *APPEND_ONLY*.
-``` sql
+// Describe pipe
+DESC pipe twt_pipe;
+//ERROR HANDLING
+//Check which file the pipe tried to load
+ALTER PIPE twt_pipe refresh;
+// Validate pipe is actually working
+SELECT SYSTEM$PIPE_STATUS('twt_pipe');
+// Snowpipe error message
+SELECT * FROM TABLE(VALIDATE_PIPE_LOAD(
+    PIPE_NAME => 'twt_pipe',
+    START_TIME => DATEADD(HOUR,-2,CURRENT_TIMESTAMP())));
+// COPY command history from table to see error massage
+SELECT * FROM TABLE (INFORMATION_SCHEMA.COPY_HISTORY(
+   table_name  =>  'twt_raw',
+   START_TIME =>DATEADD(HOUR,-2,CURRENT_TIMESTAMP())));
+   
+   
+truncate twt_parsed;
+truncate twt_tweet;
+truncate twt_user;
+
+select * from twt_raw;
+select * from twt_parsed;
+
 CREATE OR REPLACE STREAM twt_raw_stream 
 ON TABLE twt_raw
 APPEND_ONLY = TRUE;
-```
-### Tasks
 
-On schedule nos tasks :
-- TWT_PARSE_RAW_STREAM : On parse nos raw data en colonnes qu'on met dans la table **twt_parsed**, toutes les 5 minutes.
-- TWT_FILL_USER : child de TWT_PARSE_RAW_STREAM, on utilise **twt_parsed** pour ajouter et mettre à jour les informations des tweetos dans **twt_user**.
-- TWT_PARSE_RAW_STREAM  : child de TWT_PARSE_RAW_STREAM,  on utilise **twt_parsed** pour ajouter les tweets dans **twt_tweet**.
+SELECT * FROM twt_raw_stream;
 
-``` sql
+
 CREATE OR REPLACE TASK TWT_PARSE_RAW_STREAM
     WAREHOUSE = COMPUTE_WH
     SCHEDULE = '5 MINUTE'
@@ -153,6 +163,20 @@ CREATE OR REPLACE TASK TWT_FILL_TWEET
         (id,created_at,user_screen_name,text,tweet_favorite_count,tweet_quote_count,tweet_reply_count,tweet_retweet_count)
         VALUES
         (id,created_at,screen_name,text,tweet_favorite_count,tweet_quote_count,tweet_reply_count,tweet_retweet_count);
-```
+    
 
-Et ça marche bien ! Plus qu'à connecter un outil BI et à vous de jouer les Data Analystes !
+
+ALTER TASK TWT_FILL_TWEET RESUME;
+ALTER TASK TWT_FILL_USER RESUME;
+ALTER TASK TWT_PARSE_RAW_STREAM RESUME;
+
+select *
+  from table(information_schema.task_history())
+  order by scheduled_time desc;  
+  
+SHOW TASKS;
+
+select * from twt_tweet;
+select count(*) from twt_user;
+SELECT * FROM twt_raw_stream;
+
